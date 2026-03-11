@@ -35,7 +35,7 @@ ARTIFACT_PATH="./dist/github-pages.tar.gz"
 rm -rf "${DIST_DIR}"
 
 redoc_bundle_file=$(mktemp)
-git_ref_version=$(git describe --always)
+git_ref_version=$(git describe --tags --always)
 branch_docs_dir="${BRANCHES_DIR}/${git_ref_version}"
 
 # Build Redoc bundle (a single HTML file)
