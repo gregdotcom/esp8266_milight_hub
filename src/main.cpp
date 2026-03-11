@@ -41,27 +41,27 @@
 
 WiFiManager* wifiManager;
 // because of callbacks, these need to be in the higher scope :(
-WiFiManagerParameter* wifiStaticIP = NULL;
-WiFiManagerParameter* wifiStaticIPNetmask = NULL;
-WiFiManagerParameter* wifiStaticIPGateway = NULL;
-WiFiManagerParameter* wifiMode = NULL;
+WiFiManagerParameter* wifiStaticIP = nullptr;
+WiFiManagerParameter* wifiStaticIPNetmask = nullptr;
+WiFiManagerParameter* wifiStaticIPGateway = nullptr;
+WiFiManagerParameter* wifiMode = nullptr;
 
 static LEDStatus *ledStatus;
 
 Settings settings;
 
-MiLightClient* milightClient = NULL;
+MiLightClient* milightClient = nullptr;
 RadioSwitchboard* radios = nullptr;
 PacketSender* packetSender = nullptr;
 std::shared_ptr<MiLightRadioFactory> radioFactory;
-MiLightHttpServer *httpServer = NULL;
-MqttClient* mqttClient = NULL;
-MiLightDiscoveryServer* discoveryServer = NULL;
+MiLightHttpServer *httpServer = nullptr;
+MqttClient* mqttClient = nullptr;
+MiLightDiscoveryServer* discoveryServer = nullptr;
 uint8_t currentRadioType = 0;
 
 // For tracking and managing group state
-GroupStateStore* stateStore = NULL;
-BulbStateUpdater* bulbStateUpdater = NULL;
+GroupStateStore* stateStore = nullptr;
+BulbStateUpdater* bulbStateUpdater = nullptr;
 TransitionController transitions;
 
 // Cache for frequently accessed values
@@ -69,15 +69,39 @@ static size_t cachedNumRadios = 0;
 
 std::vector<std::shared_ptr<MiLightUdpServer>> udpServers;
 
+template <typename T>
+void deleteAndNull(T*& ptr) {
+  delete ptr;
+  ptr = nullptr;
+}
+
+void resetNetworkServers() {
+  udpServers.clear();
+  deleteAndNull(discoveryServer);
+}
+
+void resetRuntimeComponents() {
+  deleteAndNull(milightClient);
+  deleteAndNull(mqttClient);
+  deleteAndNull(bulbStateUpdater);
+  deleteAndNull(stateStore);
+  deleteAndNull(packetSender);
+  deleteAndNull(radios);
+
+  currentRadioType = 0;
+  cachedNumRadios = 0;
+  resetNetworkServers();
+}
+
 /**
  * Set up UDP servers (both v5 and v6).  Clean up old ones if necessary.
  */
 void initMilightUdpServers() {
+  resetNetworkServers();
+
   if (! WiFi.isConnected()) {
     return;
   }
-
-  udpServers.clear();
 
   for (size_t i = 0; i < settings.gatewayConfigs.size(); ++i) {
     const GatewayConfig& config = *settings.gatewayConfigs[i];
@@ -89,19 +113,15 @@ void initMilightUdpServers() {
       config.deviceId
     );
 
-    if (server == NULL) {
+    if (server == nullptr) {
       Serial.print(F("Error creating UDP server with protocol version: "));
       Serial.println(config.protocolVersion);
     } else {
+      server->begin();
       udpServers.push_back(std::move(server));
-      udpServers[i]->begin();
     }
   }
 
-  if (discoveryServer) {
-    delete discoveryServer;
-    discoveryServer = NULL;
-  }
   if (settings.discoveryPort != 0) {
     discoveryServer = new MiLightDiscoveryServer(settings);
     discoveryServer->begin();
@@ -137,7 +157,7 @@ void onPacketSentHandler(uint8_t* packet, const MiLightRemoteConfig& config) {
   // pass in previous scratch state as well
   const GroupState stateUpdates(groupState, result);
 
-  if (groupState != NULL) {
+  if (groupState != nullptr) {
     groupState->patch(stateUpdates);
 
     // Copy state before setting it to avoid group 0 re-initialization clobbering it
@@ -151,7 +171,7 @@ void onPacketSentHandler(uint8_t* packet, const MiLightRemoteConfig& config) {
     mqttClient->sendUpdate(remoteConfig, bulbId.deviceId, bulbId.groupId, output);
 
     // Sends the entire state
-    if (groupState != NULL) {
+    if (groupState != nullptr) {
       bulbStateUpdater->enqueueUpdate(bulbId, *groupState);
     }
   }
@@ -171,9 +191,12 @@ void handleListen() {
     return;
   }
 
-  // Cache numRadios to avoid repeated function calls
   if (cachedNumRadios == 0) {
     cachedNumRadios = radios->getNumRadios();
+  }
+
+  if (cachedNumRadios == 0) {
+    return;
   }
   
   std::shared_ptr<MiLightRadio> radio = radios->switchRadio(currentRadioType++ % cachedNumRadios);
@@ -189,7 +212,7 @@ void handleListen() {
         packetLen
       );
 
-      if (remoteConfig == NULL) {
+      if (remoteConfig == nullptr) {
         // This can happen under normal circumstances, so not an error condition
 #ifdef DEBUG_PRINTF
         Serial.println(F("WARNING: Couldn't find remote for received packet"));
@@ -227,38 +250,20 @@ void onUpdateEnd() {
  * Apply what's in the Settings object.
  */
 void applySettings() {
-  if (milightClient) {
-    delete milightClient;
-  }
-  if (mqttClient) {
-    delete mqttClient;
-    delete bulbStateUpdater;
-
-    mqttClient = NULL;
-    bulbStateUpdater = NULL;
-  }
-  if (stateStore) {
-    delete stateStore;
-  }
-  if (packetSender) {
-    delete packetSender;
-  }
-  if (radios) {
-    delete radios;
-  }
+  resetRuntimeComponents();
 
   transitions.setDefaultPeriod(settings.defaultTransitionPeriod);
 
   radioFactory = MiLightRadioFactory::fromSettings(settings);
 
-  if (radioFactory == NULL) {
+  if (radioFactory == nullptr) {
     Serial.println(F("ERROR: unable to construct radio factory"));
+    return;
   }
 
   stateStore = new GroupStateStore(MILIGHT_MAX_STATE_ITEMS, settings.stateFlushInterval);
 
   radios = new RadioSwitchboard(radioFactory, stateStore, settings);
-  cachedNumRadios = 0;  // Reset cache when radios are reinitialized
   packetSender = new PacketSender(*radios, settings, onPacketSentHandler);
 
   milightClient = new MiLightClient(
@@ -364,7 +369,7 @@ void aboutHandler(JsonDocument& json) {
 // Called when a group is deleted via the REST API.  Will publish an empty message to
 // the MQTT topic to delete retained state
 void onGroupDeleted(const BulbId& id) {
-  if (mqttClient != NULL) {
+  if (mqttClient != nullptr) {
     mqttClient->sendState(
       *MiLightRemoteConfig::fromType(id.deviceType),
       id.deviceId,
@@ -380,7 +385,7 @@ void postConnectSetup() {
   initialized = true;
 
   delete wifiManager;
-  wifiManager = NULL;
+  wifiManager = nullptr;
 
   MDNS.addService("http", "tcp", 80);
 

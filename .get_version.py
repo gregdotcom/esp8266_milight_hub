@@ -1,11 +1,12 @@
-from subprocess import check_output
-import sys
 import os
 import platform
-import subprocess
+import sys
+from pathlib import Path
+from subprocess import check_output
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 os.chdir(dir_path)
+version_file = Path(dir_path) / "VERSION"
 
 # http://stackoverflow.com/questions/11210104/check-if-a-program-exists-from-a-python-script
 def is_tool(name):
@@ -16,9 +17,14 @@ def is_tool(name):
     except:
         return False
 
-version = "UNKNOWN".encode()
+version = None
 
-if is_tool("git"):
+if version_file.exists():
+    file_version = version_file.read_text(encoding="utf-8").strip()
+    if file_version:
+        version = file_version.encode()
+
+if version is None and is_tool("git"):
     try:
         version = check_output(["git", "describe", "--always"]).rstrip()
     except:
@@ -27,5 +33,8 @@ if is_tool("git"):
         except:
             pass
         pass
+
+if version is None:
+    version = "UNKNOWN".encode()
 
 sys.stdout.write("-DMILIGHT_HUB_VERSION=%s %s" % (version.decode('utf-8'), ' '.join(sys.argv[1:])))
