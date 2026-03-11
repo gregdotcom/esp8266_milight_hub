@@ -64,6 +64,9 @@ GroupStateStore* stateStore = NULL;
 BulbStateUpdater* bulbStateUpdater = NULL;
 TransitionController transitions;
 
+// Cache for frequently accessed values
+static size_t cachedNumRadios = 0;
+
 std::vector<std::shared_ptr<MiLightUdpServer>> udpServers;
 
 /**
@@ -125,8 +128,8 @@ void onPacketSentHandler(uint8_t* packet, const MiLightRemoteConfig& config) {
     return;
   }
 
-  const MiLightRemoteConfig& remoteConfig =
-    *MiLightRemoteConfig::fromType(bulbId.deviceType);
+  // Cache remoteConfig reference to avoid repeated lookup
+  const MiLightRemoteConfig& remoteConfig = config;
 
   // update state to reflect changes from this packet
   GroupState* groupState = stateStore->get(bulbId);
@@ -168,7 +171,12 @@ void handleListen() {
     return;
   }
 
-  std::shared_ptr<MiLightRadio> radio = radios->switchRadio(currentRadioType++ % radios->getNumRadios());
+  // Cache numRadios to avoid repeated function calls
+  if (cachedNumRadios == 0) {
+    cachedNumRadios = radios->getNumRadios();
+  }
+  
+  std::shared_ptr<MiLightRadio> radio = radios->switchRadio(currentRadioType++ % cachedNumRadios);
 
   for (size_t i = 0; i < settings.listenRepeats; i++) {
     if (radios->available()) {
@@ -250,6 +258,7 @@ void applySettings() {
   stateStore = new GroupStateStore(MILIGHT_MAX_STATE_ITEMS, settings.stateFlushInterval);
 
   radios = new RadioSwitchboard(radioFactory, stateStore, settings);
+  cachedNumRadios = 0;  // Reset cache when radios are reinitialized
   packetSender = new PacketSender(*radios, settings, onPacketSentHandler);
 
   milightClient = new MiLightClient(

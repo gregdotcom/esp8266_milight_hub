@@ -102,7 +102,7 @@ void PacketSender::sendRepeats(size_t num) {
 
 #ifdef DEBUG_PRINTF
   int iElapsed = millis() - iStart;
-  Serial.print("Elapsed: ");
+  Serial.print(F("Elapsed: "));
   Serial.println(iElapsed);
 #endif
 }

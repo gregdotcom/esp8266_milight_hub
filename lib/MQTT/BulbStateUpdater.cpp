@@ -45,16 +45,21 @@ inline void BulbStateUpdater::flushGroup(BulbId bulbId, GroupState& state) {
     Serial.println(F("ERROR: State is too large for MQTT buffer, continuing anyway. Consider increasing MILIGHT_MQTT_JSON_BUFFER_SIZE."));
   }
 
-  size_t documentSize = measureJson(message);
-  char buffer[documentSize + 1];
+  // Serialize directly to reduce memory allocation overhead (no measureJson() call)
+  // Using a fixed buffer that's large enough for typical MQTT state payloads
+  char buffer[MILIGHT_MQTT_JSON_BUFFER_SIZE];
   serializeJson(json, buffer, sizeof(buffer));
 
-  mqttClient.sendState(
-    *MiLightRemoteConfig::fromType(bulbId.deviceType),
-    bulbId.deviceId,
-    bulbId.groupId,
-    buffer
-  );
+  // Cache remoteConfig to avoid repeated lookup
+  const MiLightRemoteConfig* remoteConfig = MiLightRemoteConfig::fromType(bulbId.deviceType);
+  if (remoteConfig != NULL) {
+    mqttClient.sendState(
+      *remoteConfig,
+      bulbId.deviceId,
+      bulbId.groupId,
+      buffer
+    );
+  }
 
   lastFlush = millis();
 }
