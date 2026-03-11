@@ -18,6 +18,7 @@ public:
 private:
   Settings& settings;
   MqttClient* mqttClient;
+  unsigned long lastDiscoveryPublish;  // Rate-limiting
 
   String buildTopic(const BulbId& bulbId);
   String bindTopicVariables(const String& topic, const char* alias, const BulbId& bulbId);

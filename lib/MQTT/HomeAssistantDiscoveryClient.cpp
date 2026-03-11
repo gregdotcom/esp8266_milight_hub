@@ -10,6 +10,7 @@
 HomeAssistantDiscoveryClient::HomeAssistantDiscoveryClient(Settings& settings, MqttClient* mqttClient)
   : settings(settings)
   , mqttClient(mqttClient)
+  , lastDiscoveryPublish(0)
 { }
 
 void HomeAssistantDiscoveryClient::sendDiscoverableDevices(const std::map<String, GroupAlias>& aliases) {
@@ -39,8 +40,18 @@ void HomeAssistantDiscoveryClient::removeConfig(const BulbId& bulbId) {
 }
 
 void HomeAssistantDiscoveryClient::addConfig(const char* alias, const BulbId& bulbId) {
+  // Rate-limiting: Add 50ms delay between discovery publishes to prevent MQTT overload
+  // This prevents packet loss and MQTT broker throttling when publishing many devices
+  unsigned long now = millis();
+  if (now < (lastDiscoveryPublish + 50)) {
+    delay(lastDiscoveryPublish + 50 - now);
+  }
+  lastDiscoveryPublish = millis();
+
   String topic = buildTopic(bulbId);
-  DynamicJsonDocument config(1024);
+  // Use StaticJsonDocument(512) instead of Dynamic(1024) to save ~512 bytes RAM
+  // This is sufficient for Home Assistant MQTT Discovery payloads
+  StaticJsonDocument<512> config;
 
   // Unique ID for this device + alias combo
   char uniqueIdBuffer[30];
@@ -93,7 +104,7 @@ void HomeAssistantDiscoveryClient::addConfig(const char* alias, const BulbId& bu
     case REMOTE_TYPE_FUT089:
     case REMOTE_TYPE_RGB_CCT:
     case REMOTE_TYPE_RGBW:
-      effects.add("white_mode");
+      effects.add(F("white_mode"));
       break;
     default:
       break; //nothing
@@ -140,7 +151,6 @@ void HomeAssistantDiscoveryClient::addConfig(const char* alias, const BulbId& bu
   Serial.printf_P(PSTR("HomeAssistantDiscoveryClient: adding discoverable device: %s...\n"), alias);
   Serial.printf_P(PSTR("  topic: %s\nconfig: %s\n"), topic.c_str(), message.c_str());
 #endif
-
 
   mqttClient->send(topic.c_str(), message.c_str(), true);
 }

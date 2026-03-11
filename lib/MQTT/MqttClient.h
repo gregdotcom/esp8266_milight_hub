@@ -73,6 +73,8 @@ private:
   unsigned long lastConnectAttempt;
   OnConnectFn onConnectFn;
   bool connected;
+  uint8_t reconnectAttempts;
+  unsigned long nextReconnectTime;
 
   void sendBirthMessage();
   bool connect();

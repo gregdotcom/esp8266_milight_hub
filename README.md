@@ -8,7 +8,7 @@ This project is a replacement for the wifi gateway.
 
 [This guide](http://blog.christophermullins.com/2017/02/11/milight-wifi-gateway-emulator-on-an-esp8266/) on my blog details setting one of these up.
 
-## Features
+## Features 
 
 * Fully-featured Web UI
 * MQTT support

@@ -18,7 +18,9 @@ MqttClient::MqttClient(Settings& settings, MiLightClient*& milightClient)
     milightClient(milightClient),
     settings(settings),
     lastConnectAttempt(0),
-    connected(false)
+    connected(false),
+    reconnectAttempts(0),
+    nextReconnectTime(0)
 {
   String strDomain = settings.mqttServer();
   this->domain = new char[strDomain.length() + 1];
@@ -101,7 +103,8 @@ void MqttClient::sendBirthMessage() {
 }
 
 void MqttClient::reconnect() {
-  if (lastConnectAttempt > 0 && (millis() - lastConnectAttempt) < MQTT_CONNECTION_ATTEMPT_FREQUENCY) {
+  // Exponential backoff: 5s, 10s, 20s, 40s, 60s (max)
+  if (millis() < nextReconnectTime) {
     return;
   }
 
@@ -109,6 +112,7 @@ void MqttClient::reconnect() {
     if (connect()) {
       subscribe();
       sendBirthMessage();
+      reconnectAttempts = 0;  // Reset on successful connection
 
 #ifdef MQTT_DEBUG
       Serial.println(F("MqttClient - Successfully connected to MQTT server"));
@@ -116,7 +120,17 @@ void MqttClient::reconnect() {
     } else {
       Serial.print(F("ERROR: Failed to connect to MQTT server rc="));
       Serial.println(mqttClient.state());
+      
+      // Calculate exponential backoff: 5s * 2^attempts, max 60s
+      unsigned long delayMs = (5000UL * (1UL << reconnectAttempts));
+      if (delayMs > 60000UL) {
+        delayMs = 60000UL;
+      }
+      nextReconnectTime = millis() + delayMs;
+      reconnectAttempts = (reconnectAttempts < 4) ? reconnectAttempts + 1 : 4;
     }
+  } else {
+    reconnectAttempts = 0;  // Reset counter while connected
   }
 
   lastConnectAttempt = millis();
@@ -143,7 +157,11 @@ void MqttClient::sendState(const MiLightRemoteConfig& remoteConfig, uint16_t dev
 }
 
 void MqttClient::subscribe() {
-  String topic = settings.mqttTopicPattern;
+  // Reserve space to avoid repeated allocations during replace operations
+  String topic;
+  size_t patternLen = settings.mqttTopicPattern.length();
+  topic.reserve(patternLen + 20);
+  topic = settings.mqttTopicPattern;
 
   topic.replace(":device_id", "+");
   topic.replace(":hex_device_id", "+");
@@ -276,20 +294,28 @@ void MqttClient::publishCallback(char* topic, byte* payload, int length) {
 }
 
 String MqttClient::bindTopicString(const String& topicPattern, const BulbId& bulbId) {
-  String boundTopic = topicPattern;
+  // Pre-allocate to avoid repeated reallocations during replace()
+  String boundTopic;
+  boundTopic.reserve(topicPattern.length() + 32);
+  boundTopic = topicPattern;
+  
   String deviceIdHex = bulbId.getHexDeviceId();
+  String deviceIdDec = String(bulbId.deviceId);
+  String groupIdStr = String(bulbId.groupId);
+  String deviceTypeStr = MiLightRemoteTypeHelpers::remoteTypeToString(bulbId.deviceType);
 
+  // Perform replacements in order of likelihood to minimize iterations
   boundTopic.replace(":device_id", deviceIdHex);
   boundTopic.replace(":hex_device_id", deviceIdHex);
-  boundTopic.replace(":dec_device_id", String(bulbId.deviceId));
-  boundTopic.replace(":group_id", String(bulbId.groupId));
-  boundTopic.replace(":device_type", MiLightRemoteTypeHelpers::remoteTypeToString(bulbId.deviceType));
+  boundTopic.replace(":dec_device_id", deviceIdDec);
+  boundTopic.replace(":group_id", groupIdStr);
+  boundTopic.replace(":device_type", deviceTypeStr);
 
   auto it = settings.findAlias(bulbId.deviceType, bulbId.deviceId, bulbId.groupId);
   if (it != settings.groupIdAliases.end()) {
     boundTopic.replace(":device_alias", it->first);
   } else {
-    boundTopic.replace(":device_alias", "__unnamed_group");
+    boundTopic.replace(":device_alias", F("__unnamed_group"));
   }
 
   return boundTopic;
