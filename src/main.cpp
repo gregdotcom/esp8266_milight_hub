@@ -75,6 +75,75 @@ void deleteAndNull(T*& ptr) {
   ptr = nullptr;
 }
 
+#ifdef ESP8266
+bool shouldMigrateFromSpiffs(const char* path, size_t minSize) {
+  if (!ProjectFS.exists(path)) {
+    return true;
+  }
+
+  File existingFile = ProjectFS.open(path, "r");
+  if (!existingFile) {
+    return true;
+  }
+
+  const bool shouldMigrate = existingFile.size() <= minSize;
+  existingFile.close();
+
+  return shouldMigrate;
+}
+
+bool migrateFileFromSpiffs(const char* path, size_t minSize) {
+  if (!SPIFFS.exists(path) || !shouldMigrateFromSpiffs(path, minSize)) {
+    return false;
+  }
+
+  File sourceFile = SPIFFS.open(path, "r");
+  if (!sourceFile) {
+    Serial.printf_P(PSTR("Failed to open SPIFFS file for migration: %s\n"), path);
+    return false;
+  }
+
+  File destinationFile = ProjectFS.open(path, "w");
+  if (!destinationFile) {
+    Serial.printf_P(PSTR("Failed to open LittleFS file for migration: %s\n"), path);
+    sourceFile.close();
+    return false;
+  }
+
+  const size_t copied = destinationFile.write(sourceFile);
+  const bool success = copied == sourceFile.size();
+
+  destinationFile.close();
+  sourceFile.close();
+
+  Serial.printf_P(
+    PSTR("%s %s from SPIFFS to LittleFS (%d bytes)\n"),
+    success ? "Migrated" : "Partially migrated",
+    path,
+    copied
+  );
+
+  return success;
+}
+
+void migrateEsp8266FsIfNeeded() {
+  if (!SPIFFS.begin()) {
+    Serial.println(F("SPIFFS mount failed; skipping migration to LittleFS"));
+    return;
+  }
+
+  bool migrated = false;
+  migrated |= migrateFileFromSpiffs(SETTINGS_FILE, 0);
+  migrated |= migrateFileFromSpiffs(ALIASES_FILE, 2);
+
+  if (!migrated) {
+    Serial.println(F("No SPIFFS data migration needed"));
+  }
+
+  SPIFFS.end();
+}
+#endif
+
 void resetNetworkServers() {
   udpServers.clear();
   deleteAndNull(discoveryServer);
@@ -431,6 +500,9 @@ void setup() {
     if (! ProjectFS.begin()) {
       Serial.println(F("Failed to mount file system"));
     }
+    #ifdef MILIGHT_USE_LITTLE_FS
+      migrateEsp8266FsIfNeeded();
+    #endif
   #else
     if (! ProjectFS.begin(true)) {
       Serial.println(F("Failed to mount file system"));
