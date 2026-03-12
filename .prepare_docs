@@ -41,9 +41,22 @@ branch_docs_dir="${BRANCHES_DIR}/${git_ref_version}"
 # Build Redoc bundle (a single HTML file)
 redoc-cli bundle ${API_SPEC_FILE} -o ${redoc_bundle_file} --title 'Milight Hub API Documentation'
 
-# Check out current stuff from gh-pages (we'll append to it)
-git fetch origin 'refs/heads/gh-pages:refs/heads/gh-pages'
-git checkout gh-pages -- branches || prepare_docs_log "Failed to checkout branches from gh-pages, skipping..."
+# Check out current stuff from gh-pages (we'll append to it). Forks often
+# don't have a gh-pages branch yet, so treat that as a valid empty state.
+pages_ref=""
+for remote in origin upstream; do
+  if git fetch "$remote" 'refs/heads/gh-pages:refs/heads/gh-pages' >/dev/null 2>&1; then
+    pages_ref="gh-pages"
+    prepare_docs_log "Using gh-pages content from ${remote}"
+    break
+  fi
+done
+
+if [ -n "${pages_ref}" ]; then
+  git checkout "${pages_ref}" -- branches || prepare_docs_log "Failed to checkout branches from gh-pages, skipping..."
+else
+  prepare_docs_log "No gh-pages branch found on origin or upstream, starting fresh"
+fi
 
 if [ -e "./branches" ]; then
   mkdir -p "${DIST_DIR}"
