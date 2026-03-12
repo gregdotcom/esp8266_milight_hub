@@ -206,7 +206,9 @@ void MiLightHttpServer::handleSystemPost(RequestContext& request) {
 void MiLightHttpServer::serveSettings() {
   // Save first to set defaults
   settings.save();
-  serveFile(SETTINGS_FILE, APPLICATION_JSON);
+  if (!serveFile(SETTINGS_FILE, APPLICATION_JSON)) {
+    server.send(500, APPLICATION_JSON, "{\"error\":\"Failed to load settings file\"}");
+  }
 }
 
 void MiLightHttpServer::onSettingsSaved(SettingsSavedHandler handler) {

@@ -76,24 +76,13 @@ void deleteAndNull(T*& ptr) {
 }
 
 #ifdef ESP8266
-bool shouldMigrateFromSpiffs(const char* path, size_t minSize) {
-  if (!ProjectFS.exists(path)) {
-    return true;
-  }
+struct FsMigrationFile {
+  const char* path;
+  std::vector<uint8_t> contents;
+};
 
-  File existingFile = ProjectFS.open(path, "r");
-  if (!existingFile) {
-    return true;
-  }
-
-  const bool shouldMigrate = existingFile.size() <= minSize;
-  existingFile.close();
-
-  return shouldMigrate;
-}
-
-bool migrateFileFromSpiffs(const char* path, size_t minSize) {
-  if (!SPIFFS.exists(path) || !shouldMigrateFromSpiffs(path, minSize)) {
+bool readSpiffsFile(const char* path, size_t minSize, FsMigrationFile& output) {
+  if (!SPIFFS.exists(path)) {
     return false;
   }
 
@@ -103,44 +92,94 @@ bool migrateFileFromSpiffs(const char* path, size_t minSize) {
     return false;
   }
 
-  File destinationFile = ProjectFS.open(path, "w");
-  if (!destinationFile) {
-    Serial.printf_P(PSTR("Failed to open LittleFS file for migration: %s\n"), path);
+  const size_t size = sourceFile.size();
+  if (size <= minSize) {
     sourceFile.close();
     return false;
   }
 
-  const size_t copied = destinationFile.write(sourceFile);
-  const bool success = copied == sourceFile.size();
-
-  destinationFile.close();
+  output.path = path;
+  output.contents.resize(size);
+  const size_t bytesRead = sourceFile.read(output.contents.data(), size);
   sourceFile.close();
 
+  if (bytesRead != size) {
+    Serial.printf_P(PSTR("Failed to read complete SPIFFS file for migration: %s\n"), path);
+    output.contents.clear();
+    return false;
+  }
+
+  return true;
+}
+
+bool writeProjectFsFile(const FsMigrationFile& file) {
+  File destinationFile = ProjectFS.open(file.path, "w");
+  if (!destinationFile) {
+    Serial.printf_P(PSTR("Failed to open LittleFS file for migration: %s\n"), file.path);
+    return false;
+  }
+
+  const size_t bytesWritten = destinationFile.write(file.contents.data(), file.contents.size());
+  destinationFile.close();
+
+  const bool success = bytesWritten == file.contents.size();
   Serial.printf_P(
     PSTR("%s %s from SPIFFS to LittleFS (%d bytes)\n"),
     success ? "Migrated" : "Partially migrated",
-    path,
-    copied
+    file.path,
+    bytesWritten
   );
 
   return success;
 }
 
-void migrateEsp8266FsIfNeeded() {
-  if (!SPIFFS.begin()) {
-    Serial.println(F("SPIFFS mount failed; skipping migration to LittleFS"));
-    return;
-  }
+bool beginProjectFs() {
+  #ifdef MILIGHT_USE_LITTLE_FS
+    ProjectFS.setConfig(littlefs_impl::LittleFSConfig(false));
 
-  bool migrated = false;
-  migrated |= migrateFileFromSpiffs(SETTINGS_FILE, 0);
-  migrated |= migrateFileFromSpiffs(ALIASES_FILE, 2);
+    if (ProjectFS.begin()) {
+      return true;
+    }
 
-  if (!migrated) {
-    Serial.println(F("No SPIFFS data migration needed"));
-  }
+    Serial.println(F("LittleFS mount failed. Attempting SPIFFS migration."));
 
-  SPIFFS.end();
+    std::vector<FsMigrationFile> migrationFiles;
+
+    if (SPIFFS.begin()) {
+      FsMigrationFile settingsFile{SETTINGS_FILE, {}};
+      FsMigrationFile aliasesFile{ALIASES_FILE, {}};
+
+      if (readSpiffsFile(SETTINGS_FILE, 0, settingsFile)) {
+        migrationFiles.push_back(std::move(settingsFile));
+      }
+
+      if (readSpiffsFile(ALIASES_FILE, 2, aliasesFile)) {
+        migrationFiles.push_back(std::move(aliasesFile));
+      }
+
+      SPIFFS.end();
+    } else {
+      Serial.println(F("SPIFFS mount failed; formatting LittleFS without migration"));
+    }
+
+    if (!ProjectFS.format()) {
+      Serial.println(F("Failed to format LittleFS"));
+      return false;
+    }
+
+    if (!ProjectFS.begin()) {
+      Serial.println(F("Failed to mount LittleFS after formatting"));
+      return false;
+    }
+
+    for (const FsMigrationFile& file : migrationFiles) {
+      writeProjectFsFile(file);
+    }
+
+    return true;
+  #else
+    return ProjectFS.begin();
+  #endif
 }
 #endif
 
@@ -497,12 +536,9 @@ void setup() {
   // load up our persistent settings from the file system
   // ESP8266 doesn't support the formatOnFail parameter
   #ifdef ESP8266
-    if (! ProjectFS.begin()) {
+    if (! beginProjectFs()) {
       Serial.println(F("Failed to mount file system"));
     }
-    #ifdef MILIGHT_USE_LITTLE_FS
-      migrateEsp8266FsIfNeeded();
-    #endif
   #else
     if (! ProjectFS.begin(true)) {
       Serial.println(F("Failed to mount file system"));

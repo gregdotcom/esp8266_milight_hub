@@ -70,8 +70,8 @@
     if (isDevelopment) {
       return tryLoadUrl(file.localPath, file.size, 0, 0);
     } else {
-      return tryLoadUrl(file.cdnPath, file.size, 0, 0).catch(() =>
-        tryLoadUrl(file.localPath, file.size, 0, 5)
+      return tryLoadUrl(file.localPath, file.size, 0, 1).catch(() =>
+        tryLoadUrl(file.cdnPath, file.size, 0, 0)
       );
     }
   }
